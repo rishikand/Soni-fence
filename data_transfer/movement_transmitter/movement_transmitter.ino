@@ -20,9 +20,9 @@ typedef struct send_message
   float az;
 } send_message;
 
-send_message reading;
+send_message reading; // Variable to send data
 
-char receive_char;
+char receive_char; // Receive signals from ESP WROOM
 
 void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
   memcpy(&receive_char, incomingData, sizeof(receive_char));
@@ -83,6 +83,7 @@ void setup(void) {
 
   esp_now_register_recv_cb(OnDataRecv);
 
+  // Config ESP WROOM connection
   memcpy(receiverInfo.peer_addr, recvAddress, 6);
   receiverInfo.channel = 0;
   receiverInfo.encrypt = false;
@@ -94,7 +95,7 @@ void setup(void) {
 
   Serial.println("ESPNow setup complete");
 
-  Wire.begin(6, 7);
+  Wire.begin(6, 7); // Configure I2C pins (GPIO)
 
   // Try to initialize!
   if (!bno08x.begin_I2C(0x4B)) {
@@ -142,10 +143,6 @@ void loop()
     }
   }
 
-
-  // --- Part 2: State machine for controlling data transmission ---
-  // This section now only handles the logic of when to START and STOP
-  // sending data, and sends the most recent data stored in our global variables.
   switch (state_mach) {
     case 0:
       reading.ax = -1;
