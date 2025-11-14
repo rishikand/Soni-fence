@@ -26,15 +26,16 @@ typedef struct receive_message
 receive_message xiao1reading;
 receive_message xiao2reading;
 
-bool send_data;
+bool send_data; // Says whether or not data should be logged
 
-char espSignal;
-char serialSignal;
-bool imuConnected;
+char espSignal; // Signals to send to xiao1 and xiao2 to control logic flow
+char serialSignal; // Signals from serial monitor (S to start, K to stop)
+bool imuConnected; // Initial check for if receiver has received connection signal from both xiao1 and xiao2
 
 void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
   const uint8_t *senderMac = info->src_addr;
 
+  // ID board based on mac address
   if (memcmp(senderMac, xiao1Address, 6) == 0)
   {
     memcpy(&xiao1reading, incomingData, sizeof(receive_message));
@@ -44,6 +45,7 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, in
     memcpy(&xiao2reading, incomingData, sizeof(receive_message));
   }
 
+  // Send data if send_data is true
   if (send_data == true)
   {
     Serial.print("ax1: ");
@@ -62,6 +64,7 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, in
   }
 }
 
+// Variables to store result of sending data
 esp_err_t xiao1_send_result;
 esp_err_t xiao2_send_result;
 
@@ -79,6 +82,7 @@ void setup(void) {
 
   esp_now_register_recv_cb(OnDataRecv);
 
+  // xiao1 config
   memcpy(xiao1Info.peer_addr, xiao1Address, 6);
   xiao1Info.channel = 0;
   xiao1Info.encrypt = false;
@@ -88,6 +92,7 @@ void setup(void) {
     return;
   }
 
+  // xiao2 config
   memcpy(xiao2Info.peer_addr, xiao2Address, 6);
   xiao2Info.channel = 0;
   xiao2Info.encrypt = false;
@@ -106,6 +111,7 @@ void loop()
 {
   switch (state_mach) {
     case 0:
+      // Ensure receiving from xiao1 && xiao2
       imuConnected = true;
 
       if (xiao1reading.ax == -1 && xiao1reading.ay == -1 && xiao1reading.az == -1)
@@ -128,14 +134,19 @@ void loop()
 
       if (imuConnected)
       {
-        state_mach = 1;
-        espSignal = 'O';
-        
+        espSignal = 'O'; // Signal xiao1 and xiao2 to start sending IMU data
+
         xiao1_send_result = esp_now_send(xiao1Address, (uint8_t *) &espSignal, sizeof(espSignal));
         xiao2_send_result = esp_now_send(xiao2Address, (uint8_t *) &espSignal, sizeof(espSignal));
 
         if (xiao1_send_result != ESP_OK || xiao2_send_result != ESP_OK)
+        {
           Serial.println("O send failed");
+        }
+        else
+        {
+          state_mach = 1;
+        }
       }
 
       break;
@@ -145,7 +156,7 @@ void loop()
       {
         char serialSignal = Serial.read();
 
-        if (serialSignal == 'K')
+        if (serialSignal == 'K') // Signal start from serial
         {
           state_mach = 2;
         }
@@ -154,11 +165,13 @@ void loop()
       break;
 
     case 2:
+      // Send start signal
       espSignal = 'S';
 
       xiao1_send_result = esp_now_send(xiao1Address, (uint8_t *) &espSignal, sizeof(espSignal));
       xiao2_send_result = esp_now_send(xiao2Address, (uint8_t *) &espSignal, sizeof(espSignal));
 
+      // Check if both xiao1 and xiao2 are sending data, otherwise, stop the one that did not run
       if (xiao1_send_result == ESP_OK && xiao2_send_result == ESP_OK)
       {
         Serial.println("Starting data recording");
@@ -209,7 +222,7 @@ void loop()
       {
         serialSignal = Serial.read();
 
-        if (serialSignal == 'K')
+        if (serialSignal == 'K') // Signal stop from serial
         {
           state_mach = 4;
         }
@@ -219,6 +232,8 @@ void loop()
     case 4:
       send_data = false;
       Serial.println("Data collection stopped");
+
+      state_mach = 1;
       
       break;
   }
