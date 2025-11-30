@@ -318,6 +318,7 @@ void loop()
           }
         }
 
+        // Use z-axis as forward for xiao1 (on right foot), and use y-axis as forward for xiao2 (on left foot)
         float acc1 = xiao1reading.az;
         float acc2 = xiao2reading.ay;
 
