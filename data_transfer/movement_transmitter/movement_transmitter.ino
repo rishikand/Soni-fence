@@ -5,12 +5,15 @@ ESP32C6 WROOM 1 MAX Address: 58:8c:81:3b:cc:78
 **/
 
 #include <Arduino.h>
+
 #include <Adafruit_BNO08x.h>
 
 #include <esp_now.h>
+#include <esp_wifi.h>
 #include <WiFi.h>
 
 uint8_t recvAddress[] = {0x58, 0x8c, 0x81, 0x3b, 0xcc, 0x78};
+uint8_t newMACAddress[] = {0x24, 0xec, 0x4a, 0xce, 0x4f, 0x7c};
 esp_now_peer_info_t receiverInfo;
 
 typedef struct send_message
@@ -81,6 +84,17 @@ void setup(void) {
     return;
   }
 
+  esp_err_t err = esp_wifi_set_mac(WIFI_IF_STA, &newMACAddress[0]);
+
+  if (err == ESP_OK) {
+    Serial.println("Success changing Mac Address");
+  }
+  else
+  {
+    Serial.println("Failed to change Mac Address");
+  }
+
+
   esp_now_register_recv_cb(OnDataRecv);
 
   // Config ESP WROOM connection
@@ -95,7 +109,7 @@ void setup(void) {
 
   Serial.println("ESPNow setup complete");
 
-  Wire.begin(6, 7); // Configure I2C pins (GPIO)
+  Wire.begin(D4, D5); // Configure I2C pins (GPIO)
 
   // Try to initialize!
   if (!bno08x.begin_I2C(0x4B)) {
@@ -145,19 +159,28 @@ void loop()
 
   switch (state_mach) {
     case 0:
-      reading.ax = -1;
-      reading.ay = -1;
-      reading.az = -1;
+      // Only send the "I am here" signal every 100ms, not as fast as possible
+      static unsigned long last_handshake_time = 0;
+      
+      if (millis() - last_handshake_time > 100) {
+        last_handshake_time = millis();
+        
+        reading.ax = -1;
+        reading.ay = -1;
+        reading.az = -1;
 
-      send_result = esp_now_send(recvAddress, (uint8_t *) &reading, sizeof(reading));
+        send_result = esp_now_send(recvAddress, (uint8_t *) &reading, sizeof(reading));
 
-      if (send_result != ESP_OK)
-      {
-        Serial.println("Send failed");
+        if (send_result != ESP_OK) {
+          // Serial.println("Send failed"); // Optional: comment out to reduce serial clutter
+        } else {
+           Serial.print("."); // Visual indicator that it is trying
+        }
       }
 
-      if (receive_char == 'O')
-      {
+      // Check if we received the 'O' signal from the receiver
+      if (receive_char == 'O') {
+        Serial.println("\nConnected! Moving to State 1");
         state_mach = 1;
       }
       

@@ -41,9 +41,12 @@ const int sampleRate = 16000; // 16 KHz
 const int16_t max_amplitude = 5000; // Max volume for the tone
 
 // --- Carrier (Audible Tone) ---
-volatile double current_frequency = 0.0; // Start silent
-volatile double current_phase = 0.0;
-volatile double phase_step = 0.0;
+volatile double current_frequency1 = 0.0; // Start silent
+volatile double current_frequency2 = 0.0; // Start silent
+volatile double current_phase1 = 0.0;
+volatile double current_phase2 = 0.0;
+volatile double phase_step1 = 0.0;
+volatile double phase_step2 = 0.0;
 
 // --- Modulator (LFO for Amplitude "Tremolo") ---
 volatile double mod_frequency = 0.0; 
@@ -296,90 +299,87 @@ void loop()
       break;
 
     case 3:
-  send_data = true;
+      {
+        send_data = true;
 
-  // 1. Check for Stop Signal
-  if (Serial.available() != 0)
-  {
-    serialSignal = Serial.read();
+        // 1. Check for Stop Signal
+        if (Serial.available() != 0)
+        {
+          serialSignal = Serial.read();
 
-    if (serialSignal == 'K') // Signal stop from serial
-    {
-      state_mach = 4;
-      current_frequency = 0.0; // Mute sound immediately
-      mod_frequency = 0.0;
-      break; // Exit case 3: and go to case 4 next loop
-    }
-  }
-  
-  {
-    
-    float y1_move = abs(xiao1reading.ay);
-    float x1_move = abs(xiao1reading.ax);
-    float z1_move = abs(xiao1reading.az);
+          if (serialSignal == 'K') // Signal stop from serial
+          {
+            state_mach = 4;
+            current_frequency1 = 0.0; // Mute sound immediately
+            current_frequency2 = 0.0; // Mute sound immediately
+            mod_frequency = 0.0;
 
-    float y2_move = abs(xiao2reading.ay);
-    float x2_move = abs(xiao2reading.ax);
-    float z2_move = abs(xiao2reading.az);
+            break; // Exit case 3: and go to case 4 next loop
+          }
+        }
 
-    // A. Base Frequency (Pitch): Average Y-axis movement from both sensors.
-    float avg_y_move = (y1_move + y2_move) / 2.0;
-    current_frequency = mapfloat(avg_y_move, 0.0, 15.0, 200.0, 600.0); // 200Hz (low) to 600Hz (high)
-    
-    // B. LFO Frequency (Tremolo Speed): mapped to both xiaos
-    float avg_x_move = (x1_move + x2_move) / 2.0;
-    mod_frequency = mapfloat(avg_x_move, 0.0, 15.0, 0.5, 20.0); // 0.5Hz (slow) to 20Hz (fast)
+        float acc1 = xiao1reading.az;
+        float acc2 = xiao2reading.ay;
 
-    // C. LFO Depth (Tremolo Amount): Mapped to both xiao's z axis (front of shin)
-    float avg_z_move = (z1_move + z2_move) / 2.0;
-    mod_depth = mapfloat(avg_z_move, 0.0, 15.0, 0.0, 1.0); // 0.0 = no effect, 1.0 = full effect
+        Serial.print("acc1: ");
+        Serial.print(acc1);
+        Serial.print(", acc2: ");
+        Serial.println(acc2);
 
-    // 3. Calculate phase steps based on new frequencies 
-    phase_step = (2.0 * M_PI * current_frequency) / (double)sampleRate;
-    mod_phase_step = (2.0 * M_PI * mod_frequency) / (double)sampleRate;
+        // 1. Map Accelerations to Frequencies
+        current_frequency1 = mapfloat(acc1, -15.0, 15.0, 200.0, 600.0); // Right Channel (acc1)
+        current_frequency2 = mapfloat(acc2, -15.0, 15.0, 200.0, 600.0); // Left Channel (acc2)
 
-    // 4. Audio Synthesis Loop
-    for (int i = 0; i < I2S_BUFFER_LEN_SAMPLES; i++) {
-      int16_t sample;
+        // 2. Update Phase Increments (Required to change pitch)
+        phase_step1 = (current_frequency1 * 2.0 * M_PI) / sampleRate;
+        phase_step2 = (current_frequency2 * 2.0 * M_PI) / sampleRate;
+
+        // 4. Audio Synthesis Loop
+        for (int i = 0; i < I2S_BUFFER_LEN_SAMPLES; i++) {
+          int16_t sample_right = 0;
+          int16_t sample_left = 0;
+
+          // --- MODULATOR (LFO) --- 
+          // Shared LFO for both channels to keep effects synchronized
+          double mod_value = sin(mod_phase);
+          double lfo_gain = 1.0 - (mod_depth * (1.0 + mod_value) / 2.0);
+          
+          // Update LFO Phase
+          mod_phase += mod_phase_step;
+          if (mod_phase >= 2.0 * M_PI) mod_phase -= 2.0 * M_PI;
+
+          // --- RIGHT CHANNEL (acc1) ---
+          if (current_frequency1 > 0.0) {
+              double carrier_sample1 = sin(current_phase1);
+              double current_amplitude1 = max_amplitude * lfo_gain;
+              sample_right = (int16_t)(current_amplitude1 * carrier_sample1);
+
+              // Update Phase 1
+              current_phase1 += phase_step1;
+              if (current_phase1 >= 2.0 * M_PI) current_phase1 -= 2.0 * M_PI;
+          }
+
+          // --- LEFT CHANNEL (acc2) ---
+          if (current_frequency2 > 0.0) {
+              double carrier_sample2 = sin(current_phase2);
+              double current_amplitude2 = max_amplitude * lfo_gain;
+              sample_left = (int16_t)(current_amplitude2 * carrier_sample2);
+
+              // Update Phase 2
+              current_phase2 += phase_step2;
+              if (current_phase2 >= 2.0 * M_PI) current_phase2 -= 2.0 * M_PI;
+          }
+
+          // Combine into a 32-bit stereo sample
+          // Standard I2S packing: High Word = Left, Low Word = Right
+          i2s_buffer[i] = ((int32_t)sample_left << 16) | (sample_right & 0xFFFF);
+        }
+
+        // 5. Write the entire buffer to the I2S DAC
+        i2s.write((uint8_t*)i2s_buffer, I2S_BUFFER_LEN_SAMPLES * sizeof(int32_t)); // End of new scope
       
-      if (current_frequency == 0.0) {
-        sample = 0; // Silence
-      } else {
-        
-        // --- MODULATOR (LFO) ---
-        double mod_value = sin(mod_phase);
-        // Apply LFO gain (depth calculated from z2_move)
-        double lfo_gain = 1.0 - (mod_depth * (1.0 + mod_value) / 2.0);
-
-        // --- CARRIER ---
-        double carrier_sample = sin(current_phase);
-
-        // --- COMBINE & SAMPLE ---
-        double current_amplitude = max_amplitude * lfo_gain;
-        sample = (int16_t)(current_amplitude * carrier_sample);
-
-        current_phase += phase_step;
-        mod_phase += mod_phase_step;
-        
-        if (current_phase >= 2.0 * M_PI) 
-        { 
-            current_phase -= 2.0 * M_PI; 
-        }
-        if (mod_phase >= 2.0 * M_PI)
-        { 
-            mod_phase -= 2.0 * M_PI; 
-        }
+        break;
       }
-      
-      // Combine into a 32-bit stereo sample
-      i2s_buffer[i] = ((int32_t)sample << 16) | (sample & 0xFFFF);
-    }
-
-    // 5. Write the entire buffer to the I2S DAC
-    i2s.write((uint8_t*)i2s_buffer, I2S_BUFFER_LEN_SAMPLES * sizeof(int32_t));
-  } // End of new scope
-  
-  break; 
 
     case 4:
       send_data = false;
@@ -390,3 +390,23 @@ void loop()
       break;
   }
 }
+
+
+    // phase_step1 = (2.0 * M_PI * current_frequency1) / (double)sampleRate;
+    // phase_step2 = (2.0 * M_PI * current_frequency2) / (double)sampleRate;
+
+    // // A. Base Frequency (Pitch): Average Y-axis movement from both sensors.
+    // float avg_y_move = (y1_move + y2_move) / 2.0;
+    // current_frequency = mapfloat(avg_y_move, 0.0, 15.0, 200.0, 600.0); // 200Hz (low) to 600Hz (high)
+    
+    // // B. LFO Frequency (Tremolo Speed): mapped to both xiaos
+    // float avg_x_move = (x1_move + x2_move) / 2.0;
+    // mod_frequency = mapfloat(avg_x_move, 0.0, 15.0, 0.5, 20.0); // 0.5Hz (slow) to 20Hz (fast)
+
+    // // C. LFO Depth (Tremolo Amount): Mapped to both xiao's z axis (front of shin)
+    // float avg_z_move = (z1_move + z2_move) / 2.0;
+    // mod_depth = mapfloat(avg_z_move, 0.0, 15.0, 0.0, 1.0); // 0.0 = no effect, 1.0 = full effect
+
+    // // 3. Calculate phase steps based on new frequencies 
+    // phase_step = (2.0 * M_PI * current_frequency) / (double)sampleRate;
+    // mod_phase_step = (2.0 * M_PI * mod_frequency) / (double)sampleRate;
