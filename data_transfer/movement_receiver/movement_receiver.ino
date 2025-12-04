@@ -21,6 +21,13 @@ I2SClass i2s;
 #define pDOUT 5    // DATA - I2S data
 #define TLV_RESET 10
 
+const int ZUPT_ACC_THRESHOLD = 0.08 * 0.08 * 0.08;
+const int ZUPT_TIMEOUT = 100; // milliseconds
+bool zupt1_state = false;
+bool zupt2_state = false;
+bool zupt1_timer = 0;
+bool zupt2_timer = 0;
+
 uint8_t xiao1Address[] = {0x24, 0xec, 0x4a, 0xce, 0x4f, 0x7c};
 uint8_t xiao2Address[] = {0x58, 0x8c, 0x81, 0x9e, 0x99, 0xe0};
 
@@ -33,6 +40,9 @@ typedef struct receive_message
   float ay;
   float az;
 } receive_message;
+
+float vel1;
+float vel2;
 
 receive_message xiao1reading;
 receive_message xiao2reading;
@@ -322,14 +332,56 @@ void loop()
         float acc1 = xiao1reading.az;
         float acc2 = xiao2reading.ay;
 
-        Serial.print("acc1: ");
-        Serial.print(acc1);
-        Serial.print(", acc2: ");
-        Serial.println(acc2);
+        float mag_acc1 = (xiao1reading.ax * xiao1reading.ax) + (xiao1reading.ay * xiao1reading.ay) + (xiao1reading.az * xiao1reading.az);
+
+        if (mag_acc1 < ZUPT_ACC_THRESHOLD)
+        {
+          if (!zupt1_state)
+          {
+            zupt1_timer = millis();
+            zupt1_state = true;
+          }
+
+          if (millis() - zupt1_timer > ZUPT_TIMEOUT)
+          {
+            vel1 = 0;
+          }
+        }
+        else
+        {
+          zupt1_state = false;
+          vel1 += acc1 * 0.01; // m/s^2 * s = m/s
+        }
+
+        float mag_acc2 = (xiao2reading.ax * xiao2reading.ax) + (xiao2reading.ay * xiao2reading.ay) + (xiao2reading.az * xiao2reading.az);
+
+        if (mag_acc2 < ZUPT_ACC_THRESHOLD)
+        {
+          if (!zupt2_state)
+          {
+            zupt2_timer = millis();
+            zupt2_state = true;
+          }
+
+          if (millis() - zupt2_timer > ZUPT_TIMEOUT)
+          {
+            vel2 = 0;
+          }
+        }
+        else
+        {
+          zupt2_state = false;
+          vel2 += acc2 * 0.01; // m/s^2 * s = m/s
+        }
+
+        Serial.print("vel1: ");
+        Serial.print(vel1);
+        Serial.print(", vel2: ");
+        Serial.println(vel2);
 
         // 1. Map Accelerations to Frequencies
-        current_frequency1 = mapfloat(acc1, -15.0, 15.0, 200.0, 600.0); // Right Channel (acc1)
-        current_frequency2 = mapfloat(acc2, -15.0, 15.0, 200.0, 600.0); // Left Channel (acc2)
+        current_frequency1 = mapfloat(vel1, -15.0, 15.0, 200.0, 600.0); // Right Channel (vel1)
+        current_frequency2 = mapfloat(vel2, -15.0, 15.0, 200.0, 600.0); // Left Channel (vel2)
 
         // 2. Update Phase Increments (Required to change pitch)
         phase_step1 = (current_frequency1 * 2.0 * M_PI) / sampleRate;
@@ -349,7 +401,7 @@ void loop()
           mod_phase += mod_phase_step;
           if (mod_phase >= 2.0 * M_PI) mod_phase -= 2.0 * M_PI;
 
-          // --- RIGHT CHANNEL (acc1) ---
+          // --- RIGHT CHANNEL (vel1) ---
           if (current_frequency1 > 0.0) {
               double carrier_sample1 = sin(current_phase1);
               double current_amplitude1 = max_amplitude * lfo_gain;
@@ -360,7 +412,7 @@ void loop()
               if (current_phase1 >= 2.0 * M_PI) current_phase1 -= 2.0 * M_PI;
           }
 
-          // --- LEFT CHANNEL (acc2) ---
+          // --- LEFT CHANNEL (vel2) ---
           if (current_frequency2 > 0.0) {
               double carrier_sample2 = sin(current_phase2);
               double current_amplitude2 = max_amplitude * lfo_gain;
