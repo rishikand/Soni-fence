@@ -21,12 +21,16 @@ I2SClass i2s;
 #define pDOUT 5    // DATA - I2S data
 #define TLV_RESET 10
 
-const int ZUPT_ACC_THRESHOLD = 0.08 * 0.08 * 0.08;
+const float ZUPT_ACC_THRESHOLD = 0.08 * 0.08 * 0.08;
 const int ZUPT_TIMEOUT = 100; // milliseconds
 bool zupt1_state = false;
 bool zupt2_state = false;
 bool zupt1_timer = 0;
 bool zupt2_timer = 0;
+
+const int DISCONNECT_THRESHOLD = 50; // consecutive identical readings
+float last_receive1 = 0, last_receive2 = 0;
+unsigned int disconnect_counter1 = 0, disconnect_counter2 = 0;
 
 uint8_t xiao1Address[] = {0x24, 0xec, 0x4a, 0xce, 0x4f, 0x7c};
 uint8_t xiao2Address[] = {0x58, 0x8c, 0x81, 0x9e, 0x99, 0xe0};
@@ -332,6 +336,58 @@ void loop()
         float acc1 = xiao1reading.az;
         float acc2 = xiao2reading.ay;
 
+        // Check for disconnect
+        if (last_receive1 == acc1)
+        {
+          disconnect_counter1 += 1;
+        }
+        else
+        {
+          disconnect_counter1 = 0;
+        }
+
+        if (disconnect_counter1 > DISCONNECT_THRESHOLD)
+        {
+          espSignal = 'S';
+          xiao1_send_result = esp_now_send(xiao1Address, (uint8_t *) &espSignal, sizeof(espSignal));
+
+          if (xiao1_send_result == ESP_OK)
+          {
+            disconnect_counter1 = 0;
+          }
+          else
+          {
+            Serial.println("xiao1 reconnect failed");
+          }
+        }
+
+        if (last_receive2 == acc2)
+        {
+          disconnect_counter2 += 1;
+        }
+        else
+        {
+          disconnect_counter1 = 0;
+        }
+        
+        if (disconnect_counter2 > DISCONNECT_THRESHOLD)
+        {
+          espSignal = 'S';
+          xiao2_send_result = esp_now_send(xiao2Address, (uint8_t *) &espSignal, sizeof(espSignal));
+
+          if (xiao2_send_result == ESP_OK)
+          {
+            disconnect_counter2 = 0;
+          }
+          else
+          {
+            Serial.println("xiao2 reconnect failed");
+          }
+        }
+
+        last_receive1 = acc1;
+        last_receive2 = acc2;
+
         float mag_acc1 = (xiao1reading.ax * xiao1reading.ax) + (xiao1reading.ay * xiao1reading.ay) + (xiao1reading.az * xiao1reading.az);
 
         if (mag_acc1 < ZUPT_ACC_THRESHOLD)
@@ -374,10 +430,10 @@ void loop()
           vel2 += acc2 * 0.01; // m/s^2 * s = m/s
         }
 
-        Serial.print("vel1: ");
-        Serial.print(vel1);
-        Serial.print(", vel2: ");
-        Serial.println(vel2);
+        Serial.print("mag_acc1: ");
+        Serial.print(mag_acc1);
+        Serial.print(", mag_acc2: ");
+        Serial.println(mag_acc2);
 
         // 1. Map Accelerations to Frequencies
         current_frequency1 = mapfloat(vel1, -15.0, 15.0, 200.0, 600.0); // Right Channel (vel1)
